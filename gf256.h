@@ -6,12 +6,13 @@
 #include <cstdint>
 #include <iomanip>
 #include <ostream>
+#include <stdexcept>
 
 // Implements the operations of the Galois Field GF(256) using the reducing
 // polynomial x^8 + x^4 + x^3 + x + 1.
 //
 // In this field, each element is represented by a single byte.
-// 
+//
 // The provided operations are: addition, subtraction, multiplication, division,
 // power.
 class GF {
@@ -70,10 +71,10 @@ class GF {
   GF& operator*=(GF b) { return operator=((*this) * b); }
 
   // Division.
-  // Precondition: b != GF(0)
+  // Throws: std::runtime_error if b == GF(0).
   friend GF operator/(GF a, GF b) {
-    assert(b);
-    if (!a || !b) return GF(0);
+    if (!b) throw std::runtime_error("Cannot divide by GF(0)");
+    if (!a) return GF(0);
 
     int c = int(logs[a.bits - 1]) - int(logs[b.bits - 1]);
     if (c < 0) c += max;
@@ -85,10 +86,31 @@ class GF {
 
   GF& operator/=(GF b) { return operator=(*this / b); }
 
+  // Returns the discrete logarithm of `a`. The base of the logarithm is the
+  // generator element 3.
+  // Throws: std::runtime_error if a == GF(0).
+  friend int log(const GF a) {
+    if (!a) throw std::runtime_error("Cannot compute log(GF(0))");
+    return logs[a.bits - 1];
+  }
+
+  // Returns the generator element 3 raised to the power `b`. The exponent `b`
+  // can be negative.
+  static GF exp(int b) {
+    b %= max;
+    if (b < 0) b += max;
+    assert(b >= 0);
+    assert(b < max);
+    return GF(ilogs[b]);
+  }
+
   // Returns `a` raised to the power `b`. The exponent `b` can be negative if
   // `a` is not zero.
-  friend GF pow(GF a, int b) {
+  // Throws: std::runtime_error if a == GF(0) and b <= 0.
+  friend GF pow(const GF a, int b) {
     if (!a) {
+      if (b <= 0)
+        throw std::runtime_error("Cannot compute pow(GF(0), b) for b <= 0");
       assert(b > 0);
       return GF(0);
     }
@@ -96,12 +118,7 @@ class GF {
     b %= max;
     if (b == 0) return GF(1);
     b *= int(logs[a.bits - 1]);
-    b %= max;
-    if (b < 0) b += max;
-
-    assert(b >= 0);
-    assert(b < max);
-    return GF(ilogs[b]);
+    return GF::exp(b);
   }
 
   // Maximum value. This is also the size of the multiplicative group, which
