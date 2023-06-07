@@ -4,60 +4,75 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
-#include <iomanip>
 #include <ostream>
+#include <span>
 #include <stdexcept>
+#include <vector>
 
 // Implements the operations of the Galois Field GF(256) using the reducing
 // polynomial x^8 + x^4 + x^3 + x + 1.
 //
-// In this field, each element is represented by a single byte.
+// In this field, each element is represented by a single byte. Therefore,
+// sizeof(GF) == 1.
 //
 // The provided operations are: addition, subtraction, multiplication, division,
-// power.
+// logarithm and power.
 class GF {
  public:
   // An element of GF(256) is a single byte.
   using Bits = std::uint8_t;
-  Bits bits = 0;
+  Bits bits;
 
   // Constructors.
-  GF() = default;
-  explicit GF(Bits v) : bits(v) {}
-  explicit GF(std::byte v) : bits(Bits(v)) {}
+  GF() noexcept : bits(0) {}
+  explicit GF(Bits v) noexcept : bits(v) {}
+  explicit GF(std::byte v) noexcept : bits(Bits(v)) {}
+
+  // Conversion operators.
+  explicit operator Bits() const noexcept { return bits; }
+  explicit operator std::byte() const noexcept { return std::byte(bits); }
 
   // Indicates whether this element is zero.
-  bool is_zero() const { return bits == 0; }
-  explicit operator bool() const { return bits != 0; }
+  bool is_zero() const noexcept { return bits == 0; }
+
+  // Indicates whether this element is not zero.
+  explicit operator bool() const noexcept { return bits != 0; }
 
   // Comparison operator.
   friend std::strong_ordering operator<=>(GF a, GF b) = default;
 
   // Stream insertion operator.
+  // Prints the value in hexadecimal.
   friend std::ostream& operator<<(std::ostream& out, const GF a) {
-    return out << "GF(" << int(a.bits) << ")";
+    const char c[] = "0123456789ABCDEF";
+    return out << c[a.bits >> 4] << c[a.bits & 0xF];
   }
 
   // The opposite of an element is this element itself.
-  GF operator+() const { return *this; }
-  GF operator-() const { return *this; }
+  GF operator+() const noexcept { return *this; }
+  GF operator-() const noexcept { return *this; }
 
   // Addition and subtraction are the same operation.
-  friend GF operator+(const GF a, const GF b) { return GF(a.bits ^ b.bits); }
-  friend GF operator-(const GF a, const GF b) { return GF(a.bits ^ b.bits); }
+  friend GF operator+(const GF a, const GF b) noexcept {
+    return GF(a.bits ^ b.bits);
+  }
 
-  GF& operator+=(const GF b) {
+  friend GF operator-(const GF a, const GF b) noexcept {
+    return GF(a.bits ^ b.bits);
+  }
+
+  GF& operator+=(const GF b) noexcept {
     bits ^= b.bits;
     return *this;
   }
 
-  GF& operator-=(const GF b) {
+  GF& operator-=(const GF b) noexcept {
     bits ^= b.bits;
     return *this;
   }
 
   // Multiplication.
-  friend GF operator*(const GF a, const GF b) {
+  friend GF operator*(const GF a, const GF b) noexcept {
     if (!a || !b) return GF(0);
 
     int c = int(logs[a.bits - 1]) + int(logs[b.bits - 1]);
@@ -96,7 +111,7 @@ class GF {
 
   // Returns the generator element 3 raised to the power `b`. The exponent `b`
   // can be negative.
-  static GF exp(int b) {
+  static GF exp(int b) noexcept {
     b %= max;
     if (b < 0) b += max;
     assert(b >= 0);
@@ -167,3 +182,105 @@ class GF {
       13,  23,  57,  75,  221, 124, 132, 151, 162, 253, 28,  36,  108, 180,
       199, 82,  246};
 };
+
+// Struct used as input and output of the `interpolate` function.
+struct Share {
+  GF x;
+  std::vector<GF> ys;
+
+  friend bool operator==(const Share& a, const Share& b) = default;
+
+  friend std::ostream& operator<<(std::ostream& out, const Share& s) {
+    out << "{x: " << s.x << ", ys: [";
+    const char* sep = "";
+    for (const GF y : s.ys) {
+      out << sep << y;
+      sep = " ";
+    }
+    return out << "]}";
+  }
+};
+
+// Interpolates polynomials using the Lagrange polynomial method.
+//
+// The given `shares` define the polynomials to interpolate. There must be at
+// least two shares. All the shares must have distinct `x` values. All the
+// shares must have the same number of `y` values.
+//
+// Let's `n` be the number of given shares, and `m` be the number of `y` values
+// of each share:
+// n == shares.size()
+// m == s.ys.size() for each s in shares
+//
+// The degree of the interpolated polynomials is `n - 1`. A different polynomial
+// is computed for each set of `y` values at each position `j` in [0..m). More
+// precisely, for each `j` in [0..m), there is a unique polynomial `p[j]` of
+// degree `n - 1` determined by the set of points {(s.x, s.ys[j]) for `s` in
+// `shares`}. For each `j` in [0..m), and for each share `s` in `shares`, the
+// polynomial p[j] of degree `n - 1` verifies the equation: p[j](s.x) ==
+// s.ys[j].
+//
+// The result `r` of this `interpolate` function is a new share containing all
+// these `m` polynomials evaluated at the destination value `dest_x`:
+// r.x == dest_x
+// r.ys.size() == m
+// r.ys[j] == p[j](dest_x) for j in [0..m)
+//
+// The time complexity of this method is O(n*(n+m)).
+// The space complexity is just O(m) for the resulting share.
+//
+// Precondition: shares.size() >= 2
+// Precondition: shares[i].x != shares[j].x for i != j
+// Precondition: shares[i].ys.size() == shares[j].ys.size() for i != j
+inline Share interpolate(std::span<const Share> shares, GF dest_x) {
+  if (shares.size() < 2) {
+    throw std::runtime_error("Too few shares");
+  }
+
+  // Number of y values of each share.
+  const size_t m = shares.front().ys.size();
+
+  // Logarithm of the product of (s.x - dest_x) for s in shares.
+  int a = 0;
+
+  for (const Share& s : shares) {
+    if (s.ys.size() != m) {
+      throw std::runtime_error(
+          "All the shares must have the same number of y values");
+    }
+
+    const GF d = s.x - dest_x;
+    if (!d) {
+      return s;
+    }
+
+    a += log(d);
+  }
+
+  Share r;
+  r.x = dest_x;
+  r.ys.resize(m);
+
+  for (const Share& s : shares) {
+    // Logarithm of the Lagrange basis polynomial evaluated at dest_x.
+    int b = a - log(s.x - dest_x);
+    for (const Share& t : shares) {
+      if (&s != &t) {
+        const GF d = s.x - t.x;
+        if (!d) {
+          throw std::runtime_error(
+              "All the shares must have distinct x values");
+        }
+        b -= log(d);
+      }
+    }
+
+    for (size_t i = 0; i < m; ++i) {
+      if (const GF y = s.ys[i]) {
+        r.ys[i] += GF::exp(b + log(y));
+      }
+    }
+  }
+
+  return r;
+}

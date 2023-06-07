@@ -7,4 +7,4 @@ GF($2^8$), using the reducing polynomial $x^8 + x^4 + x^3 + x + 1$.
 In this field, each element is represented by a single byte.
 
 The provided operations are: addition, subtraction, multiplication, division,
-power.
+logarithm, power, inverse and polynomial interpolation.
